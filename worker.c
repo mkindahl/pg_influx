@@ -50,6 +50,8 @@
 void WorkerMain(Datum dbid) pg_attribute_noreturn();
 PG_FUNCTION_INFO_V1(worker_launch);
 
+#define VECTOR_COUNT 10
+
 typedef struct WorkerArgs {
   Oid namespace_id;
   char service[NI_MAXSERV];
@@ -223,7 +225,7 @@ void WorkerMain(Datum arg) {
      the actual MTU here and just pick something that is common. */
   const Oid database_id = DatumGetInt32(arg);
   int sfd;
-  char buffer[1500];
+
   WorkerArgs *args = (WorkerArgs *)&MyBgworkerEntry->bgw_extra;
 
   /* Establish signal handlers; once that's done, unblock signals. */
@@ -256,6 +258,9 @@ void WorkerMain(Datum arg) {
   while (true) {
     int wait_result;
     int err;
+    struct mmsghdr msgs[VECTOR_COUNT];
+    struct iovec iovecs[VECTOR_COUNT];
+    char buffers[VECTOR_COUNT][1500];
 
     ResetLatch(MyLatch);
     if (ShutdownWorker)
@@ -277,7 +282,7 @@ void WorkerMain(Datum arg) {
     pgstat_report_activity(STATE_RUNNING, "processing incoming packets");
 
     while (!ShutdownWorker) {
-      int bytes;
+      int retval, i;
 
       if (ReloadConfig) {
         ReloadConfig = false;
@@ -285,11 +290,19 @@ void WorkerMain(Datum arg) {
         elog(LOG, "configuration file reloaded");
       }
 
+      memset(msgs, 0, sizeof(msgs));
+      for (i = 0; i < VECTOR_COUNT; i++) {
+        iovecs[i].iov_base = buffers[i];
+        iovecs[i].iov_len = BUFSIZE;
+        msgs[i].msg_hdr.msg_iov = &iovecs[i];
+        msgs[i].msg_hdr.msg_iovlen = 1;
+      }
+
       /* Try to read one batch of rows from the socket. Note that the
          socket is in noblock mode, so this might fail immediately and
          we will then exit to the outer loop. */
-      bytes = recv(sfd, &buffer, sizeof(buffer), 0);
-      if (bytes < 0) {
+      retval = recvmmsg(sfd, msgs, sizeof(msgs) / sizeof(*msgs), 0, NULL);
+      if (retval < 0) {
         /* Leave the inner loop if there either was no data to receive
          * or if the call was interrupted by a signal. */
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
@@ -298,7 +311,8 @@ void WorkerMain(Datum arg) {
                         errmsg("could not read lines: %m")));
       }
 
-      ProcessPacket(buffer, bytes, args->namespace_id);
+      for (i = 0; i < retval; ++i)
+        ProcessPacket(buffers[i], msgs[i].msg_len, args->namespace_id);
     }
 
     PopActiveSnapshot();

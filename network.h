@@ -20,6 +20,8 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
+#define BUFSIZE 1500
+
 /**
  * Method to setup the socket and also check it.
  *

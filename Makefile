@@ -13,7 +13,7 @@
 # limitations under the License.
 
 EXTENSION = influx
-DATA = influx--0.3.sql
+DATA = influx--0.4.sql
 MODULE_big = influx
 OBJS = influx.o worker.o network.o parser.o cache.o
 
